@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <time.h>
 
 #define MAX_SIZE_FILA 10
 #define NUM_CLIENTES 3
@@ -12,6 +13,8 @@
 typedef struct {
     int id_pedido;
     int id_cliente;
+    float valor;
+    int pagamento_realizado;
 } Pedido;
 
 // Estrutura da fila 
@@ -81,12 +84,47 @@ Pedido desenfileirar_pedido(int id_worker) {
     return p;
 }
 
+Pedido criar_pedido(int id_cliente, int i) {
+    Pedido p;
+    p.id_pedido = (id_cliente * 100) + i;
+    p.id_cliente = id_cliente;
+    p.valor = (rand() % 4000) + 1000;
+    p.pagamento_realizado = 0;
+
+    printf("[CLIENTE] Cliente %d criou o pedido %d (R$ %.2f)\n", id_cliente, p.id_pedido, p.valor);
+    return p;
+}
+
+void fazer_pagamento(Pedido* p) {
+    p->pagamento_realizado = 1;
+
+    printf("[CLIENTE] Cliente %d realizou pagamento do pedido %d\n",
+           p->id_cliente, p->id_pedido);
+}
+
+// OBSERVER
+
+void log_evento(const char* evento, Pedido p) {
+    printf("[LOG] %s | Pedido %d | Cliente %d\n",
+           evento, p.id_pedido, p.id_cliente);
+}
+
+void notificar(const char* evento, Pedido p) {
+    log_evento(evento, p);
+}
+
 // Threads
 void* rotina_cliente(void* arg) {
     int id_cliente = *((int*)arg);
     for(int i = 1; i <= 3; i++) { //Cada cliente vai gerar 3 pedidos
-        Pedido p = { .id_pedido = (id_cliente * 100) + i, .id_cliente = id_cliente};
+        Pedido p = criar_pedido(id_cliente, i);
+        notificar("PEDIDO_CRIADO", p);
+
+        fazer_pagamento(&p);
+        notificar("PAGAMENTO_REALIZADO", p);
+
         enfileirar_pedido(p);
+        notificar("ENFILEIRADO", p);
         sleep(rand() % 3); //Tempo randômico entre pedidos
     }
     return NULL;
@@ -107,6 +145,8 @@ void* rotina_worker_vendas(void* arg) {
 }
 
 int main() {
+    srand(time(NULL)); 
+
     inicializar_fila();
     pthread_t clientes[NUM_CLIENTES];
     pthread_t workers[NUM_WORKERS];
