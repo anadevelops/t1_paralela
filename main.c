@@ -41,6 +41,16 @@ typedef struct {
     pthread_cond_t cond_nao_cheia;
 } Fila;
 
+// Validações
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int pagamento_ok;
+    int validade_ok;
+    int pagamento_done;
+    int validade_done;
+} ValidacaoSuspensa;
+
 Fila fila;
 
 void inicializar_fila() {
@@ -51,6 +61,20 @@ void inicializar_fila() {
     pthread_mutex_init(&fila.mutex, NULL);
     pthread_cond_init(&fila.cond_nao_vazia, NULL);
     pthread_cond_init(&fila.cond_nao_cheia, NULL);
+}
+
+void inicializar_validacao_suspensa(ValidacaoSuspensa* vs) {
+    pthread_mutex_init(&vs->mutex, NULL);
+    pthread_cond_init(&vs->cond, NULL);
+    vs->pagamento_ok = 0;
+    vs->validade_ok = 0;
+    vs->pagamento_done = 0;
+    vs->validade_done = 0;
+}
+
+void destruir_validacao_suspensa(ValidacaoSuspensa* vs) {
+    pthread_mutex_destroy(&vs->mutex);
+    pthread_cond_destroy(&vs->cond);
 }
 
 // SUSPENSÃO CONTROLADA: PRODUTOR
@@ -153,13 +177,74 @@ bool validar_cadastro(Pedido *p) {
     return true;
 }
 
-bool validar_pagamento(Pedido *p) {
-    if (ocorreu_falha(TAXA_PAGAMENTO)) {
+typedef struct {
+    Pedido* pedido;
+    ValidacaoSuspensa* vs;
+} ValidacaoArgs;
+
+void* validar_pagamento_thread(void* arg) {
+    ValidacaoArgs* args = (ValidacaoArgs*)arg;
+    Pedido* p = args->pedido;
+    ValidacaoSuspensa* vs = args->vs;
+    bool pagamento_ok = !ocorreu_falha(TAXA_PAGAMENTO);
+
+    pthread_mutex_lock(&vs->mutex);
+    if (pagamento_ok) {
+        notificar("PAGAMENTO_APROVADO", *p);
+        vs->pagamento_ok = 1;
+    } else {
         notificar("PAGAMENTO_RECUSADO", *p);
-        return false;
+        vs->pagamento_ok = 0;
     }
-    notificar("PAGAMENTO_APROVADO", *p);
-    return true;
+    vs->pagamento_done = 1;
+    printf("[SUSPENSAO] Pedido %d: Validação de pagamento concluída.\n", p->id_pedido);
+    pthread_cond_signal(&vs->cond);
+    pthread_mutex_unlock(&vs->mutex);
+    return NULL;
+}
+
+void* validar_validade_thread(void* arg) {
+    ValidacaoArgs* args = (ValidacaoArgs*)arg;
+    Pedido* p = args->pedido;
+    ValidacaoSuspensa* vs = args->vs;
+    bool validade_ok = p->valor > 0;
+
+    pthread_mutex_lock(&vs->mutex);
+    if (validade_ok) {
+        notificar("VALIDADE_APROVADA", *p);
+        vs->validade_ok = 1;
+    } else {
+        notificar("VALIDADE_RECUSADA", *p);
+        vs->validade_ok = 0;
+    }
+    vs->validade_done = 1;
+    printf("[SUSPENSAO] Pedido %d: Validação de validade concluída.\n", p->id_pedido);
+    pthread_cond_signal(&vs->cond);
+    pthread_mutex_unlock(&vs->mutex);
+    return NULL;
+}
+
+bool validar_com_suspensao(Pedido *p) {
+    ValidacaoSuspensa vs;
+    ValidacaoArgs args = {p, &vs};
+    pthread_t thread_pagamento;
+    pthread_t thread_validade;
+
+    inicializar_validacao_suspensa(&vs);
+    pthread_create(&thread_pagamento, NULL, validar_pagamento_thread, &args);
+    pthread_create(&thread_validade, NULL, validar_validade_thread, &args);
+
+    pthread_mutex_lock(&vs.mutex);
+    while (!(vs.pagamento_done && vs.validade_done)) {
+        pthread_cond_wait(&vs.cond, &vs.mutex);
+    }
+    bool resultado = (vs.pagamento_ok && vs.validade_ok);
+    pthread_mutex_unlock(&vs.mutex);
+
+    pthread_join(thread_pagamento, NULL);
+    pthread_join(thread_validade, NULL);
+    destruir_validacao_suspensa(&vs);
+    return resultado;
 }
 
 bool encaminhar_logistica(Pedido *p) {
@@ -193,11 +278,27 @@ void* rotina_worker_vendas(void* arg) {
     int id_worker = *((int*)arg);
     Pedido p;
     while (desenfileirar_pedido(id_worker, &p)) {
-        // Etapas de validação:
-        //1. Validação de Cadastro do cliente
-        //2. Operação 'financeira'
-        //3. Logística
-        if (!validar_cadastro(&p) || !validar_pagamento(&p) || !encaminhar_logistica(&p)) {
+        printf("[WORKER %d] Iniciando validações para pedido %d...\n", id_worker, p.id_pedido);
+        
+        // Etapa 1: Validação de Cadastro
+        if (!validar_cadastro(&p)) {
+            p.status = STATUS_CANCELADO;
+            notificar("PEDIDO_CANCELADO", p);
+            sleep(rand() % 2);
+            continue;
+        }
+        
+        // Etapa 2 e 3: SUSPENSÃO CONTROLADA - Validação de Pagamento e Validade em paralelo
+        if (!validar_com_suspensao(&p)) {
+            p.status = STATUS_CANCELADO;
+            notificar("PEDIDO_CANCELADO", p);
+            sleep(rand() % 2);
+            continue;
+        }
+        
+        // Etapa 4: Apenas se AMBAS as validações forem OK, encaminha para logística
+        printf("[WORKER %d] Pedido %d aprovado em TODAS as validações. Encaminhando para logística...\n", id_worker, p.id_pedido);
+        if (!encaminhar_logistica(&p)) {
             p.status = STATUS_CANCELADO;
             notificar("PEDIDO_CANCELADO", p);
         } else {
