@@ -9,20 +9,32 @@
 #define NUM_CLIENTES 3
 #define NUM_WORKERS 2
 
+// Taxas de falha configuráveis por etapa (TODO: ajustar conforme testes)
+#define TAXA_CADASTRO  0.10f
+#define TAXA_PAGAMENTO 0.15f
+#define TAXA_LOGISTICA 0.05f
+
+// Status do pedido
+#define STATUS_AGUARDANDO 0
+#define STATUS_ENTREGUE   1
+#define STATUS_CANCELADO  2
+
 // Estrutura do pedido
 typedef struct {
     int id_pedido;
     int id_cliente;
     float valor;
     int pagamento_realizado;
+    int status;
 } Pedido;
 
-// Estrutura da fila 
+// Estrutura da fila
 typedef struct {
     Pedido buffer[MAX_SIZE_FILA];
     int inicio;
     int fim;
     int quantidade;
+    int encerrada;
 
     pthread_mutex_t mutex;
     pthread_cond_t cond_nao_vazia;
@@ -35,6 +47,7 @@ void inicializar_fila() {
     fila.inicio = 0;
     fila.fim = 0;
     fila.quantidade = 0;
+    fila.encerrada = 0;
     pthread_mutex_init(&fila.mutex, NULL);
     pthread_cond_init(&fila.cond_nao_vazia, NULL);
     pthread_cond_init(&fila.cond_nao_cheia, NULL);
@@ -57,31 +70,42 @@ void enfileirar_pedido(Pedido p) {
     printf("[PRODUTOR] Cliente %d fez o pedido %d. (Fila: %d/%d)\n", p.id_cliente, p.id_pedido, fila.quantidade, MAX_SIZE_FILA);
 
     pthread_cond_signal(&fila.cond_nao_vazia);
-
     pthread_mutex_unlock(&fila.mutex);
 }
 
 // SUSPENSÃO CONTROLADA: CONSUMIDOR
-Pedido desenfileirar_pedido(int id_worker) {
+bool desenfileirar_pedido(int id_worker, Pedido *out) {
     pthread_mutex_lock(&fila.mutex);
 
     // Espera quando a fila estiver vazia
-    while (fila.quantidade == 0) {
+    while (fila.quantidade == 0 && !fila.encerrada) {
         pthread_cond_wait(&fila.cond_nao_vazia, &fila.mutex);
     }
 
+    // Encerrada e vazia: sinaliza fim para o worker
+    if (fila.quantidade == 0) {
+        pthread_mutex_unlock(&fila.mutex);
+        return false;
+    }
+
     // Retira o pedido da fila
-    Pedido p = fila.buffer[fila.inicio];
+    *out = fila.buffer[fila.inicio];
     fila.inicio = (fila.inicio + 1) % MAX_SIZE_FILA;
     fila.quantidade--;
 
-    printf("[CONSUMIDOR] Worker %d pegou o pedido %d, (Fila: %d/%d)\n", id_worker, p.id_pedido, fila.quantidade, MAX_SIZE_FILA);
+    printf("[CONSUMIDOR] Worker %d pegou o pedido %d, (Fila: %d/%d)\n", id_worker, out->id_pedido, fila.quantidade, MAX_SIZE_FILA);
 
     pthread_cond_signal(&fila.cond_nao_cheia);
-
     pthread_mutex_unlock(&fila.mutex);
+    return true;
+}
 
-    return p;
+// Sinaliza que não virão mais pedidos e acorda todos os workers
+void encerrar_fila() {
+    pthread_mutex_lock(&fila.mutex);
+    fila.encerrada = 1;
+    pthread_cond_broadcast(&fila.cond_nao_vazia);
+    pthread_mutex_unlock(&fila.mutex);
 }
 
 Pedido criar_pedido(int id_cliente, int i) {
@@ -90,6 +114,7 @@ Pedido criar_pedido(int id_cliente, int i) {
     p.id_cliente = id_cliente;
     p.valor = (rand() % 4000) + 1000;
     p.pagamento_realizado = 0;
+    p.status = STATUS_AGUARDANDO;
 
     printf("[CLIENTE] Cliente %d criou o pedido %d (R$ %.2f)\n", id_cliente, p.id_pedido, p.valor);
     return p;
@@ -113,6 +138,40 @@ void notificar(const char* evento, Pedido p) {
     log_evento(evento, p);
 }
 
+// PIPELINE DE VALIDAÇÃO
+
+static bool ocorreu_falha(float taxa) {
+    return ((float)rand() / RAND_MAX) < taxa;
+}
+
+bool validar_cadastro(Pedido *p) {
+    if (p->id_cliente == 3 || ocorreu_falha(TAXA_CADASTRO)) {
+        notificar("CADASTRO_REPROVADO", *p);
+        return false;
+    }
+    notificar("CADASTRO_APROVADO", *p);
+    return true;
+}
+
+bool validar_pagamento(Pedido *p) {
+    if (ocorreu_falha(TAXA_PAGAMENTO)) {
+        notificar("PAGAMENTO_RECUSADO", *p);
+        return false;
+    }
+    notificar("PAGAMENTO_APROVADO", *p);
+    return true;
+}
+
+bool encaminhar_logistica(Pedido *p) {
+    if (ocorreu_falha(TAXA_LOGISTICA)) {
+        notificar("ENTREGA_FALHOU", *p);
+        return false;
+    }
+    p->status = STATUS_ENTREGUE;
+    notificar("ENTREGA_REALIZADA", *p);
+    return true;
+}
+
 // Threads
 void* rotina_cliente(void* arg) {
     int id_cliente = *((int*)arg);
@@ -132,20 +191,26 @@ void* rotina_cliente(void* arg) {
 
 void* rotina_worker_vendas(void* arg) {
     int id_worker = *((int*)arg);
-    while (true) {
-        Pedido p = desenfileirar_pedido(id_worker);
-        // Inserir etapas de validação:
+    Pedido p;
+    while (desenfileirar_pedido(id_worker, &p)) {
+        // Etapas de validação:
         //1. Validação de Cadastro do cliente
         //2. Operação 'financeira'
         //3. Logística
-        printf(" --> Processando etapas do pedido %d...\n", p.id_pedido);
-        sleep(rand() % 4);
+        if (!validar_cadastro(&p) || !validar_pagamento(&p) || !encaminhar_logistica(&p)) {
+            p.status = STATUS_CANCELADO;
+            notificar("PEDIDO_CANCELADO", p);
+        } else {
+            p.status = STATUS_ENTREGUE;
+            notificar("PEDIDO_CONCLUIDO", p);
+        }
+        sleep(rand() % 2);
     }
     return NULL;
 }
 
 int main() {
-    srand(time(NULL)); 
+    srand(time(NULL));
 
     inicializar_fila();
     pthread_t clientes[NUM_CLIENTES];
@@ -169,6 +234,10 @@ int main() {
         pthread_join(clientes[i], NULL);
     }
 
+    encerrar_fila();
+    for (int i = 0; i < NUM_WORKERS; i++) {
+        pthread_join(workers[i], NULL);
+    }
+
     return 0;
 }
-
