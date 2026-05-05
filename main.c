@@ -140,21 +140,35 @@ void notificar(const char* evento, Pedido p) {
 
 // PIPELINE DE VALIDAÇÃO
 
-// TODO: implementar lógica de validação
+static bool ocorreu_falha(float taxa) {
+    return ((float)rand() / RAND_MAX) < taxa;
+}
+
 bool validar_cadastro(Pedido *p) {
-    (void)p;
+    if (p->id_cliente == 3 || ocorreu_falha(TAXA_CADASTRO)) {
+        notificar("CADASTRO_REPROVADO", *p);
+        return false;
+    }
+    notificar("CADASTRO_APROVADO", *p);
     return true;
 }
 
-// TODO: implementar lógica de validação
 bool validar_pagamento(Pedido *p) {
-    (void)p;
+    if (ocorreu_falha(TAXA_PAGAMENTO)) {
+        notificar("PAGAMENTO_RECUSADO", *p);
+        return false;
+    }
+    notificar("PAGAMENTO_APROVADO", *p);
     return true;
 }
 
-// TODO: implementar lógica de validação
 bool encaminhar_logistica(Pedido *p) {
-    (void)p;
+    if (ocorreu_falha(TAXA_LOGISTICA)) {
+        notificar("ENTREGA_FALHOU", *p);
+        return false;
+    }
+    p->status = STATUS_ENTREGUE;
+    notificar("ENTREGA_REALIZADA", *p);
     return true;
 }
 
