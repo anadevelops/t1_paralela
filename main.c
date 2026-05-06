@@ -7,7 +7,8 @@
 
 #define MAX_SIZE_FILA 10
 #define NUM_CLIENTES 3
-#define NUM_WORKERS 2
+#define NUM_WORKERS 4
+
 
 // Taxas de falha configuráveis por etapa (TODO: ajustar conforme testes)
 #define TAXA_CADASTRO  0.10f
