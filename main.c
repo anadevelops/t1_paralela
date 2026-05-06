@@ -320,6 +320,8 @@ int main() {
     int ids_clientes[NUM_CLIENTES];
     int ids_workers[NUM_WORKERS];
 
+    // POOL DE THREADS
+
     //Inicia workers
     for (int i = 0; i < NUM_WORKERS; i++) {
         ids_workers[i] = i + 1;
@@ -337,6 +339,7 @@ int main() {
     }
 
     encerrar_fila();
+    
     for (int i = 0; i < NUM_WORKERS; i++) {
         pthread_join(workers[i], NULL);
     }
