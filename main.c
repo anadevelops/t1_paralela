@@ -7,7 +7,8 @@
 
 #define MAX_SIZE_FILA 10
 #define NUM_CLIENTES 3
-#define NUM_WORKERS 2
+#define NUM_WORKERS 4
+
 
 // Taxas de falha configuráveis por etapa (TODO: ajustar conforme testes)
 #define TAXA_CADASTRO  0.10f
@@ -319,6 +320,8 @@ int main() {
     int ids_clientes[NUM_CLIENTES];
     int ids_workers[NUM_WORKERS];
 
+    // POOL DE THREADS
+
     //Inicia workers
     for (int i = 0; i < NUM_WORKERS; i++) {
         ids_workers[i] = i + 1;
@@ -336,6 +339,7 @@ int main() {
     }
 
     encerrar_fila();
+    
     for (int i = 0; i < NUM_WORKERS; i++) {
         pthread_join(workers[i], NULL);
     }
