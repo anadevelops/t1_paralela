@@ -14,3 +14,8 @@ O sistema foi desenvolvido e testado em ambiente **Linux (Ubuntu)**
 ## Instruções para compilação
 Utilizar o comando:
 ```gcc -pthread -o main main.c```
+
+## Autores
+- Ana Clara Stupp de Souza
+- Gabriel Pessi Buchweitz
+- Reni Rogete Rosa Ferreira Junior
