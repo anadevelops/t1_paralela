@@ -10,7 +10,7 @@
 #define NUM_WORKERS 4
 
 
-// Taxas de falha configuráveis por etapa (TODO: ajustar conforme testes)
+// Taxas de falha configuráveis por etapa
 #define TAXA_CADASTRO  0.10f
 #define TAXA_PAGAMENTO 0.15f
 #define TAXA_LOGISTICA 0.05f
@@ -25,7 +25,6 @@ typedef struct {
     int id_pedido;
     int id_cliente;
     float valor;
-    int pagamento_realizado;
     int status;
 } Pedido;
 
@@ -138,18 +137,10 @@ Pedido criar_pedido(int id_cliente, int i) {
     p.id_pedido = (id_cliente * 100) + i;
     p.id_cliente = id_cliente;
     p.valor = (rand() % 4000) + 1000;
-    p.pagamento_realizado = 0;
     p.status = STATUS_AGUARDANDO;
 
     printf("[CLIENTE] Cliente %d criou o pedido %d (R$ %.2f)\n", id_cliente, p.id_pedido, p.valor);
     return p;
-}
-
-void fazer_pagamento(Pedido* p) {
-    p->pagamento_realizado = 1;
-
-    printf("[CLIENTE] Cliente %d realizou pagamento do pedido %d\n",
-           p->id_cliente, p->id_pedido);
 }
 
 // OBSERVER
@@ -170,7 +161,7 @@ static bool ocorreu_falha(float taxa) {
 }
 
 bool validar_cadastro(Pedido *p) {
-    if (p->id_cliente == 3 || ocorreu_falha(TAXA_CADASTRO)) {
+    if (ocorreu_falha(TAXA_CADASTRO)) {
         notificar("CADASTRO_REPROVADO", *p);
         return false;
     }
@@ -264,9 +255,6 @@ void* rotina_cliente(void* arg) {
     for(int i = 1; i <= 3; i++) { //Cada cliente vai gerar 3 pedidos
         Pedido p = criar_pedido(id_cliente, i);
         notificar("PEDIDO_CRIADO", p);
-
-        fazer_pagamento(&p);
-        notificar("PAGAMENTO_REALIZADO", p);
 
         enfileirar_pedido(p);
         notificar("ENFILEIRADO", p);
